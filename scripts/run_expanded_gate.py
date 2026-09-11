@@ -81,10 +81,12 @@ def main():
                 if res[("C1", l, v)].verdict == "pass" and res[("C2", l, v)].verdict == "pass"]
         print(f"\nv={v:.2f}: {len(both)} layers pass for BOTH corpora")
         if both:
-            runs, cur = [], [both[0]]
+            runs = [[both[0]]]
             for l in both[1:]:
-                (cur.append(l) if l == cur[-1] + 1 else (runs.append(cur), cur.clear(), cur.append(l)))
-            runs.append(cur)
+                if l == runs[-1][-1] + 1:
+                    runs[-1].append(l)
+                else:
+                    runs.append([l])          # a NEW list; never mutate one already stored
             longest = max(runs, key=len)
             print(f"  layers: {both}")
             print(f"  longest contiguous run: {len(longest)} ({longest[0]}-{longest[-1]})"
