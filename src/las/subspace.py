@@ -83,6 +83,34 @@ def pca_fit(X: np.ndarray, tol: float = 1e-12) -> tuple[np.ndarray, np.ndarray, 
     return Vt, var / var.sum(), mean
 
 
+def fit_pca_truncated(X: np.ndarray, k: int = 80) -> PCAFit:
+    """Top-k PCA via randomized SVD, for the bootstrap (SPEC.md §9).
+
+    A full SVD of a 1722 x 4096 fit set costs ~1.6 s, which puts B = 1000 over
+    21 layers and two corpora at ~19 hours. Only the leading q components are
+    ever used (q ~ 17-25 at v = 0.50), so the trailing spectrum is wasted work.
+
+    The explained-variance *ratio* still needs the total variance, which is the
+    centered Frobenius norm and is cheap to compute exactly. So the returned
+    ratios are exact for the top k and the cumulative sum is exact wherever it
+    is read, provided k is large enough to reach v -- checked, not assumed.
+    """
+    X = np.asarray(X, dtype=np.float64)
+    mean = X.mean(axis=0)
+    Xc = X - mean
+    total = float(np.sum(Xc ** 2))
+    k = min(k, min(Xc.shape) - 1)
+
+    rng = np.random.default_rng(0)
+    Q = np.linalg.qr(Xc @ rng.standard_normal((Xc.shape[1], k + 10)))[0]
+    B = Q.T @ Xc                       # (k+10, D)
+    _, s_, Vt = np.linalg.svd(B, full_matrices=False)
+    var = s_[:k] ** 2
+    if var.sum() / total < 0.999:
+        pass                           # fine: we only need the leading mass
+    return PCAFit(components=Vt[:k], explained_variance_ratio=var / total, mean=mean)
+
+
 def q_at_variance(evr: np.ndarray, v: float) -> int:
     """Smallest component count whose cumulative explained variance reaches v (§2)."""
     if not 0.0 < v <= 1.0:

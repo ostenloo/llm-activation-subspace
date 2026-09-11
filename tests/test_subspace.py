@@ -157,3 +157,27 @@ def test_q_is_monotone_in_v():
     fit = fit_pca(X - X.mean(0))
     qs = [fit.q_at(v) for v in (0.30, 0.50, 0.75, 0.90, 0.99)]
     assert qs == sorted(qs)
+
+
+def test_truncated_pca_matches_full_pca_on_the_leading_subspace():
+    """The bootstrap uses randomized truncated SVD; it must agree with the exact
+    decomposition wherever the analysis actually reads it."""
+    from las.subspace import fit_pca, fit_pca_truncated
+    X, _ = planted(n=200, D=400, k=40, seed=31)
+    full, trunc = fit_pca(X), fit_pca_truncated(X, k=80)
+    for v in (0.50, 0.75):
+        assert full.q_at(v) == trunc.q_at(v)
+        q = full.q_at(v)
+        # Same subspace, up to sign/rotation within it.
+        M = full.components[:q] @ trunc.components[:q].T
+        assert np.sum(M ** 2) / q == pytest.approx(1.0, abs=1e-6)
+
+
+def test_truncated_pca_capture_matches_full():
+    from las.subspace import fit_pca, fit_pca_truncated
+    rng = np.random.default_rng(32)
+    X, _ = planted(n=200, D=400, k=40, seed=33)
+    dZ = rng.standard_normal((30, 400))
+    a = capture(fit_pca(X).subspace(0.50).components, dZ)
+    b = capture(fit_pca_truncated(X, k=80).subspace(0.50).components, dZ)
+    assert a == pytest.approx(b, abs=1e-8)
