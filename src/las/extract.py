@@ -82,3 +82,18 @@ def capture(L: Loaded, prompts: list[str], batch_size: int = 16,
         layers = torch.stack(hs[1:], dim=0)          # [32, batch, seq, hidden]
         out.append(layers[:, :, position, :].float().cpu().numpy())
     return np.concatenate(out, axis=1)
+
+
+def release(L: Loaded) -> None:
+    """Free the model's VRAM.
+
+    Extraction is followed by a long numpy-only phase (the gate, the bootstrap).
+    Holding the model through it strands ~25 GB and OOMs anything else on the box.
+    """
+    import gc
+
+    import torch
+
+    L.model = None
+    gc.collect()
+    torch.cuda.empty_cache()

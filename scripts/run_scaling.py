@@ -53,6 +53,7 @@ def main() -> None:
         A = extract.capture(L, prompts, batch_size=32)
         np.save(cache, A)
         (ACTS / "c2_scaling_prompts.json").write_text(json.dumps(prompts, indent=1))
+        extract.release(L)
         print(f"saved {A.shape}", flush=True)
 
     rng = np.random.default_rng(args.seed)

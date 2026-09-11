@@ -57,6 +57,7 @@ def main():
         A1 = extract.capture(L, c1, batch_size=32); np.save(f1, A1)
         A2 = extract.capture(L, c2, batch_size=32); np.save(f2, A2)
         (ACTS / "exp_prompts.json").write_text(json.dumps({"c1": c1, "c2": c2}))
+        extract.release(L)
         print(f"saved {A1.shape} / {A2.shape}", flush=True)
 
     rng = np.random.default_rng(args.seed)
