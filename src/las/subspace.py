@@ -90,11 +90,43 @@ def q_at_variance(evr: np.ndarray, v: float) -> int:
     return int(np.searchsorted(np.cumsum(evr), v) + 1)
 
 
-def fit_subspace(X: np.ndarray, v: float) -> Subspace:
-    """U_C(v) -- the leading PCs reaching cumulative variance v (§2)."""
+@dataclasses.dataclass(frozen=True)
+class PCAFit:
+    """One PCA of a fit set, from which every variance level is derived.
+
+    The three levels in §3 select different q from the *same* spectrum, so the
+    decomposition does not depend on v. Refitting per level triples the cost of
+    the §8 gate and the §9 bootstrap for nothing; fit once and slice.
+    """
+
+    components: np.ndarray
+    explained_variance_ratio: np.ndarray
+    mean: np.ndarray
+
+    @property
+    def rank(self) -> int:
+        return int(self.explained_variance_ratio.size)
+
+    def q_at(self, v: float) -> int:
+        return q_at_variance(self.explained_variance_ratio, v)
+
+    def subspace(self, v: float) -> Subspace:
+        """U_C(v) -- the leading PCs reaching cumulative variance v (§2)."""
+        q = self.q_at(v)
+        return Subspace(components=self.components[:q],
+                        explained_variance_ratio=self.explained_variance_ratio,
+                        mean=self.mean, q=q, v=v)
+
+
+def fit_pca(X: np.ndarray) -> PCAFit:
+    """Decompose a fit set once, for reuse across every variance level."""
     comps, evr, mean = pca_fit(X)
-    q = q_at_variance(evr, v)
-    return Subspace(components=comps[:q], explained_variance_ratio=evr, mean=mean, q=q, v=v)
+    return PCAFit(components=comps, explained_variance_ratio=evr, mean=mean)
+
+
+def fit_subspace(X: np.ndarray, v: float) -> Subspace:
+    """U_C(v) for a single level. Prefer fit_pca(X).subspace(v) when v varies."""
+    return fit_pca(X).subspace(v)
 
 
 def capture(U: np.ndarray, dZ: np.ndarray) -> float:

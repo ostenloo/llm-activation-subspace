@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 
 import numpy as np
 
-from .config import GATE_THRESHOLD, ROGUE_K
+from .config import GATE_THRESHOLD, ROGUE_K, VARIANCE_LEVELS
 from .controls import ablate_coordinates, cosine_contributions
-from .subspace import Preprocessor, fit_subspace
+from .subspace import Preprocessor, fit_pca
 
 
 @dataclasses.dataclass(frozen=True)
@@ -49,17 +50,21 @@ def _halves(n: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
     return perm[: n // 2], perm[n // 2 : 2 * (n // 2)]
 
 
-def split_half_overlap(
+def split_half_overlaps(
     X: np.ndarray,
-    v: float,
+    vs: Sequence[float],
     rng: np.random.Generator,
     n_splits: int = 50,
     mode: str = "center",
-) -> tuple[float, list[Overlap]]:
-    """Median split-half overlap over n_splits disjoint random halvings of one corpus.
+) -> dict[float, tuple[float, list[Overlap]]]:
+    """Median split-half overlap over n_splits disjoint random halvings, at every v.
 
     This is the ceiling for the between-corpus principal-angle diagnostic: between-
     corpus overlap is only interpretable relative to it.
+
+    Each halving is decomposed once and every variance level is sliced off the same
+    spectrum, so the levels also share their splits -- removing split noise between
+    them, which a per-level refit would leave in.
 
     SPEC.md §8 does not fix n_splits or the summary across splits; both are recorded
     here as defaults and must be closed in writing before the gate is run for real
@@ -67,15 +72,27 @@ def split_half_overlap(
     unlucky halving at small N can be arbitrarily bad.
     """
     X = np.asarray(X, dtype=np.float64)
-    out = []
+    out: dict[float, list[Overlap]] = {v: [] for v in vs}
     for _ in range(n_splits):
         ia, ib = _halves(X.shape[0], rng)
         Xa, Xb = X[ia], X[ib]
         pa, pb = Preprocessor.fit(Xa, mode), Preprocessor.fit(Xb, mode)
-        Ua = fit_subspace(pa.apply(Xa), v)
-        Ub = fit_subspace(pb.apply(Xb), v)
-        out.append(subspace_overlap(Ua.components, Ub.components))
-    return float(np.median([o.overlap for o in out])), out
+        fa, fb = fit_pca(pa.apply(Xa)), fit_pca(pb.apply(Xb))
+        for v in vs:
+            out[v].append(subspace_overlap(fa.subspace(v).components,
+                                           fb.subspace(v).components))
+    return {v: (float(np.median([o.overlap for o in obs])), obs) for v, obs in out.items()}
+
+
+def split_half_overlap(
+    X: np.ndarray,
+    v: float,
+    rng: np.random.Generator,
+    n_splits: int = 50,
+    mode: str = "center",
+) -> tuple[float, list[Overlap]]:
+    """Single-level convenience wrapper over split_half_overlaps."""
+    return split_half_overlaps(X, (v,), rng, n_splits=n_splits, mode=mode)[v]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -97,6 +114,57 @@ class GateResult:
         return self.verdict == "pass"
 
 
+def gate_cells(
+    X: np.ndarray,
+    vs: Sequence[float] = VARIANCE_LEVELS,
+    rng: np.random.Generator | None = None,
+    layer: int | None = None,
+    k: int = ROGUE_K,
+    n_splits: int = 50,
+    mode: str = "center",
+    threshold: float = GATE_THRESHOLD,
+) -> dict[float, GateResult]:
+    """Gate every (v, l) cell for one layer, on raw and rogue-ablated overlap (§8).
+
+    A cell passing raw but failing ablated is rogue-carried: its apparent
+    identifiability is supplied by a few high-variance coordinates that both halves
+    recover trivially, while the rest of the subspace is noise. Such cells are
+    excluded from the primary rather than counted as identified.
+
+    The rogue set is a property of the corpus and layer, not of v, so it is computed
+    once here and the ablated corpus is decomposed once per halving.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    X = np.asarray(X, dtype=np.float64)
+    raw = split_half_overlaps(X, vs, rng, n_splits=n_splits, mode=mode)
+
+    cc = cosine_contributions(X)
+    rogue_idx = np.argsort(np.abs(cc))[::-1][:k]
+    ablated = split_half_overlaps(
+        ablate_coordinates(X, rogue_idx), vs, rng, n_splits=n_splits, mode=mode
+    )
+
+    out = {}
+    for v in vs:
+        raw_med, obs = raw[v]
+        abl_med, _ = ablated[v]
+        if raw_med >= threshold and abl_med >= threshold:
+            verdict = "pass"
+        elif raw_med >= threshold:
+            verdict = "rogue_carried"
+        else:
+            verdict = "fail"
+        out[v] = GateResult(
+            v=v, layer=layer, raw=raw_med, ablated=abl_med, verdict=verdict,
+            q1_median=float(np.median([o.q1 for o in obs])),
+            q2_median=float(np.median([o.q2 for o in obs])),
+            q_gap_median=float(np.median([o.q_gap for o in obs])),
+            rogue_idx=rogue_idx,
+        )
+    return out
+
+
 def gate_cell(
     X: np.ndarray,
     v: float,
@@ -107,37 +175,6 @@ def gate_cell(
     mode: str = "center",
     threshold: float = GATE_THRESHOLD,
 ) -> GateResult:
-    """Gate one (v, l) cell on both raw and rogue-ablated split-half overlap (§8).
-
-    A cell passing raw but failing ablated is rogue-carried: its apparent
-    identifiability is supplied by a few high-variance coordinates that both halves
-    recover trivially, while the rest of the subspace is noise. Such cells are
-    excluded from the primary rather than counted as identified.
-    """
-    X = np.asarray(X, dtype=np.float64)
-    raw, obs = split_half_overlap(X, v, rng, n_splits=n_splits, mode=mode)
-
-    cc = cosine_contributions(X)
-    rogue_idx = np.argsort(np.abs(cc))[::-1][:k]
-    ablated, _ = split_half_overlap(
-        ablate_coordinates(X, rogue_idx), v, rng, n_splits=n_splits, mode=mode
-    )
-
-    if raw >= threshold and ablated >= threshold:
-        verdict = "pass"
-    elif raw >= threshold:
-        verdict = "rogue_carried"
-    else:
-        verdict = "fail"
-
-    return GateResult(
-        v=v,
-        layer=layer,
-        raw=raw,
-        ablated=ablated,
-        verdict=verdict,
-        q1_median=float(np.median([o.q1 for o in obs])),
-        q2_median=float(np.median([o.q2 for o in obs])),
-        q_gap_median=float(np.median([o.q_gap for o in obs])),
-        rogue_idx=rogue_idx,
-    )
+    """Single-level convenience wrapper over gate_cells."""
+    return gate_cells(X, (v,), rng, layer=layer, k=k, n_splits=n_splits,
+                      mode=mode, threshold=threshold)[v]

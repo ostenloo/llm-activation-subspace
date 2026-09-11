@@ -12,7 +12,8 @@ def planted(n=120, D=60, k=4, seed=0):
     """n points whose variance lives in a known k-dimensional subspace."""
     rng = np.random.default_rng(seed)
     B = np.linalg.qr(rng.standard_normal((D, k)))[0]
-    return (rng.standard_normal((n, k)) * np.array([9.0, 6.0, 3.0, 1.0])) @ B.T, B
+    scale = 9.0 * 0.6 ** np.arange(k)   # distinct, decaying, defined for any k
+    return (rng.standard_normal((n, k)) * scale) @ B.T, B
 
 
 def test_pca_recovers_planted_subspace():
@@ -128,3 +129,31 @@ def test_logit_scale_can_disagree_with_raw_scale():
 def test_zero_displacement_is_rejected_not_silently_zero():
     with pytest.raises(ValueError):
         capture(np.eye(1, 3), np.zeros((4, 3)))
+
+
+def test_shared_spectrum_equals_refitting_per_level():
+    """The refactor's correctness condition: v selects q from a spectrum that does
+    not depend on v, so deriving every level from one fit must be identical to
+    fitting each level separately."""
+    from las.subspace import fit_pca
+    X, _ = planted(n=90, D=70, k=12, seed=11)
+    fit = fit_pca(X - X.mean(0))
+    for v in (0.50, 0.75, 0.90, 0.99):
+        once, refit = fit.subspace(v), fit_subspace(X - X.mean(0), v)
+        assert once.q == refit.q
+        assert np.array_equal(once.components, refit.components)
+
+
+def test_pcafit_rank_matches_the_available_spectrum():
+    from las.subspace import fit_pca
+    rng = np.random.default_rng(12)
+    fit = fit_pca(rng.standard_normal((25, 300)))
+    assert fit.rank == fit.explained_variance_ratio.size <= 25
+
+
+def test_q_is_monotone_in_v():
+    from las.subspace import fit_pca
+    X, _ = planted(n=100, D=80, k=20, seed=13)
+    fit = fit_pca(X - X.mean(0))
+    qs = [fit.q_at(v) for v in (0.30, 0.50, 0.75, 0.90, 0.99)]
+    assert qs == sorted(qs)
