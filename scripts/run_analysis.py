@@ -72,7 +72,8 @@ def main():
         cells = {}
         for name, X in (("1", A1[layer - 1]), ("2", A2[layer - 1])):
             pre = Preprocessor.fit(X, "center")
-            U = fit_pca(pre.apply(X)).subspace(V)
+            fit = fit_pca(pre.apply(X))
+            U = fit.subspace(V)
             cells[f"ref_{name}"] = capture(U.components, pre.apply_displacement(dref))
             cells[f"arb_{name}"] = capture(U.components, pre.apply_displacement(darb))
             cells[f"q_{name}"] = U.q
@@ -81,7 +82,7 @@ def main():
                 bnd = rank_band(U.q, U.rank)
                 summary[f"null_{name}"] = capture(R, pre.apply_displacement(dref))
                 summary[f"band_{name}"] = (
-                    capture(U.components[bnd.start:bnd.stop], pre.apply_displacement(dref))
+                    capture(fit.band(bnd.start, bnd.stop), pre.apply_displacement(dref))
                     if bnd.applicable else float("nan"))
                 summary[f"band_kind_{name}"] = bnd.kind
                 summary[f"perprompt_{name}"] = capture_per_prompt(

@@ -59,10 +59,6 @@ class Subspace:
         """Components the fit set can support at all (§7 rank rule)."""
         return int(self.explained_variance_ratio.size)
 
-    def basis(self, start: int, stop: int) -> np.ndarray:
-        """PCs in the half-open 0-indexed band [start, stop)."""
-        return self.components[start:stop]
-
 
 def pca_fit(X: np.ndarray, tol: float = 1e-12) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Full available PCA of X (n, D). Returns (components, evr, mean).
@@ -137,6 +133,20 @@ class PCAFit:
 
     def q_at(self, v: float) -> int:
         return q_at_variance(self.explained_variance_ratio, v)
+
+    def band(self, start: int, stop: int) -> np.ndarray:
+        """PCs in the half-open 0-indexed band [start, stop).
+
+        Lives on PCAFit, not Subspace: a Subspace holds only its leading q rows,
+        so slicing a rank band off it silently returns an empty basis and every
+        capture against it reads 0.
+        """
+        if not 0 <= start < stop <= self.components.shape[0]:
+            raise ValueError(
+                f"band [{start}, {stop}) outside the available {self.components.shape[0]} "
+                f"components"
+            )
+        return self.components[start:stop]
 
     def subspace(self, v: float) -> Subspace:
         """U_C(v) -- the leading PCs reaching cumulative variance v (§2)."""

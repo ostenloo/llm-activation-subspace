@@ -115,3 +115,28 @@ def test_ablate_coordinates_drops_exactly_those_columns():
     out = ablate_coordinates(X, np.array([1, 3]))
     assert out.shape == (4, 3)
     assert np.allclose(out, X[:, [0, 2, 4]])
+
+
+def test_rank_band_capture_is_nonzero_and_comes_from_the_full_decomposition():
+    """Regression: the band was sliced off Subspace.components, which holds only
+    the leading q rows, so [q:2q] was empty and every capture read exactly 0."""
+    from las.subspace import capture, fit_pca
+    rng = np.random.default_rng(40)
+    X = rng.standard_normal((200, 300)) * np.exp(-np.arange(300) / 40)
+    fit = fit_pca(X - X.mean(0))
+    U = fit.subspace(0.50)
+    b = rank_band(U.q, fit.rank)
+    assert b.applicable
+    band = fit.band(b.start, b.stop)
+    assert band.shape[0] == b.width > 0
+    dZ = rng.standard_normal((30, 300))
+    assert capture(band, dZ) > 0.0
+    # And the truncated subspace could not have supplied it.
+    assert U.components[b.start:b.stop].shape[0] == 0
+
+
+def test_band_rejects_a_range_past_the_spectrum():
+    from las.subspace import fit_pca
+    fit = fit_pca(np.random.default_rng(41).standard_normal((30, 100)))
+    with pytest.raises(ValueError):
+        fit.band(0, fit.rank + 5)
