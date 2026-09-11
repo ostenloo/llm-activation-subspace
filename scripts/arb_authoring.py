@@ -33,6 +33,17 @@ def _tok():
     return AutoTokenizer.from_pretrained(MODEL)
 
 
+def _edit_index(a_ids, b_ids, tok) -> int | None:
+    """Token index where an edit first lands, for the OPEN-2 locus check."""
+    import difflib
+    a = [tok.decode([t]) for t in a_ids]
+    b = [tok.decode([t]) for t in b_ids]
+    for tag, i1, _, _, _ in difflib.SequenceMatcher(a=a, b=b).get_opcodes():
+        if tag != "equal":
+            return i1
+    return None
+
+
 def _diff(a_ids, b_ids, tok) -> str:
     """Token-level edit script, so a miss shows what is actually being counted."""
     import difflib
@@ -81,7 +92,7 @@ def check(path: str) -> int:
     tok = _tok()
     enc = lambda s: tok(s, add_special_tokens=False)["input_ids"]
 
-    problems, blank, ok = [], 0, 0
+    problems, locus, blank, ok = [], [], 0, 0
     lens = {"base": [], "ref": [], "arb": []}
     for i, r in enumerate(rows, 2):  # 2 = first data line in the file
         arb = r["arb_variant"].strip()
@@ -107,6 +118,14 @@ def check(path: str) -> int:
                 f"      diff: {_diff(enc(r['base_prompt']), enc(arb), tok)}")
         else:
             ok += 1
+        # OPEN-2 matches on position: ref and arb should edit the same slot.
+        i_ref = _edit_index(enc(r["base_prompt"]), enc(r["ref_variant"]), tok)
+        i_arb = _edit_index(enc(r["base_prompt"]), enc(arb), tok)
+        if i_ref is not None and i_arb is not None and i_ref != i_arb:
+            locus.append(
+                f"  line {i} [{label}] ref edits token {i_ref}, arb edits token {i_arb}\n"
+                f"      ref: {_diff(enc(r['base_prompt']), enc(r['ref_variant']), tok)}\n"
+                f"      arb: {_diff(enc(r['base_prompt']), enc(arb), tok)}")
         lens["base"].append(len(enc(r["base_prompt"])))
         lens["ref"].append(len(enc(r["ref_variant"])))
         lens["arb"].append(len(enc(arb)))
@@ -126,9 +145,19 @@ def check(path: str) -> int:
         print("\n".join(problems))
     if blank:
         print(f"\n{blank} row(s) still blank.")
+    if locus:
+        print(f"\n{len(locus)} locus mismatch(es) -- not auto-failed, your call:")
+        print("\n".join(locus))
+        print("  OPEN-2 matches on position. Editing a different slot than the ref")
+        print("  edit means the two displacements differ in WHERE the change landed,")
+        print("  not only in what it meant. Usually you want the same slot.")
+
     if not problems and not blank:
-        print("\nAll rows satisfy the OPEN-2 constraints on distance and locus.")
-        print("Non-refusal is checked at extraction time against the OPEN-1 detector.")
+        print("\nDistance and non-degeneracy: all rows pass."
+              + (f" {len(locus)} locus mismatch(es) above." if locus else ""))
+        print("NOT checked here: that each arb_variant stays safe, and that it reads")
+        print("naturally. Those are the authoring judgments. Non-refusal is verified")
+        print("at extraction time against the OPEN-1 detector.")
         return 0
     return 1
 
