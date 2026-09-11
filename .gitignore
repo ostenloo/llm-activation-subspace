@@ -1,0 +1,12 @@
+# Generated artifacts. results/ holds derived corpus splits containing prompt
+# text; regenerate with scripts/build_c1.py rather than committing them.
+results/
+acts/
+*.npy
+*.npz
+
+# Environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
