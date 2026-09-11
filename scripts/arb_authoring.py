@@ -4,12 +4,14 @@ The arb family is authored by the researcher, not generated, because a
 constructed substitution family can carry a systematic signature and the
 procedure that generates it cannot audit it.
 
-  --emit   write the worklist: one row per ref base prompt, with the edit
-           distance that row's arb variant must match, and a blank slot.
-  --check  validate a filled-in worklist against the OPEN-2 constraints.
+  --emit    write the worklist: one row per ref base prompt, with the edit
+            distance that row's arb variant must match, and a blank slot.
+  --check   validate a filled-in worklist; says how far off each row is.
+  --tokens  show how a phrase tokenizes, for when a row will not land.
 
     python scripts/arb_authoring.py --emit  --out results/arb_worklist.csv
     python scripts/arb_authoring.py --check --in  results/arb_worklist.csv
+    python scripts/arb_authoring.py --tokens "a party balloon"
 """
 import argparse
 import collections
@@ -29,6 +31,30 @@ FIELDS = ["focus", "type", "d_required", "base_prompt", "ref_variant", "arb_vari
 def _tok():
     from transformers import AutoTokenizer
     return AutoTokenizer.from_pretrained(MODEL)
+
+
+def _diff(a_ids, b_ids, tok) -> str:
+    """Token-level edit script, so a miss shows what is actually being counted."""
+    import difflib
+    a = [tok.decode([t]) for t in a_ids]
+    b = [tok.decode([t]) for t in b_ids]
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b).get_opcodes():
+        if tag == "replace":
+            out.append(f"{a[i1:i2]} -> {b[j1:j2]}")
+        elif tag == "delete":
+            out.append(f"drop {a[i1:i2]}")
+        elif tag == "insert":
+            out.append(f"add {b[j1:j2]}")
+    return "; ".join(out) or "(identical)"
+
+
+def tokens(text: str) -> None:
+    """How many tokens is this phrase, and where do the splits fall."""
+    tok = _tok()
+    ids = tok(text, add_special_tokens=False)["input_ids"]
+    parts = [tok.decode([t]) for t in ids]
+    print(f"{len(ids)} token(s): " + " | ".join(repr(p) for p in parts))
 
 
 def emit(split_path: str, out: str) -> None:
@@ -55,7 +81,7 @@ def check(path: str) -> int:
     tok = _tok()
     enc = lambda s: tok(s, add_special_tokens=False)["input_ids"]
 
-    problems, blank = [], 0
+    problems, blank, ok = [], 0, 0
     lens = {"base": [], "ref": [], "arb": []}
     for i, r in enumerate(rows, 2):  # 2 = first data line in the file
         arb = r["arb_variant"].strip()
@@ -64,18 +90,29 @@ def check(path: str) -> int:
             continue
         want = int(r["d_required"])
         got = token_levenshtein(enc(r["base_prompt"]), enc(arb))
-        if got != want:
-            problems.append(f"  line {i} ({r['focus']}): distance {got}, need {want}")
+        label = r["focus"] or r["type"]
         if arb == r["base_prompt"]:
-            problems.append(f"  line {i} ({r['focus']}): arb is identical to base")
-        if arb == r["ref_variant"]:
-            problems.append(f"  line {i} ({r['focus']}): arb is the ref variant")
+            problems.append(f"  line {i} [{label}] arb is identical to base_prompt")
+        elif arb == r["ref_variant"]:
+            problems.append(f"  line {i} [{label}] arb is the ref_variant")
+        elif got != want:
+            delta = want - got
+            how = (f"add {delta} more changed token{'s' if delta > 1 else ''}"
+                   if delta > 0 else
+                   f"change {-delta} fewer token{'s' if -delta > 1 else ''}")
+            problems.append(
+                f"  line {i} [{label}] distance {got}, need {want} -> {how}\n"
+                f"      base: {r['base_prompt']}\n"
+                f"      arb : {arb}\n"
+                f"      diff: {_diff(enc(r['base_prompt']), enc(arb), tok)}")
+        else:
+            ok += 1
         lens["base"].append(len(enc(r["base_prompt"])))
         lens["ref"].append(len(enc(r["ref_variant"])))
         lens["arb"].append(len(enc(arb)))
 
     n = len(rows) - blank
-    print(f"rows: {len(rows)}   filled: {n}   blank: {blank}")
+    print(f"rows: {len(rows)}   ok: {ok}   need work: {n - ok}   blank: {blank}")
     if lens["arb"]:
         for k, v in lens.items():
             print(f"  {k:>4} token length: median {sorted(v)[len(v)//2]}, "
@@ -100,16 +137,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--emit", action="store_true")
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--tokens", metavar="TEXT")
     ap.add_argument("--split", default="results/c1_split.json")
     ap.add_argument("--out", default="results/arb_worklist.csv")
     ap.add_argument("--in", dest="inp", default="results/arb_worklist.csv")
     a = ap.parse_args()
-    if a.emit:
+    if a.tokens:
+        tokens(a.tokens)
+    elif a.emit:
         emit(a.split, a.out)
     elif a.check:
         sys.exit(check(a.inp))
     else:
-        ap.error("pass --emit or --check")
+        ap.error("pass --emit, --check, or --tokens")
 
 
 if __name__ == "__main__":
