@@ -10,3 +10,6 @@ acts/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# Authoring artifact; commit the FILLED worklist (it defines the arb family).
+# The blank emitted copy is regenerable: scripts/arb_authoring.py --emit
