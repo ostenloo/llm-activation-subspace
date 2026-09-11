@@ -43,9 +43,11 @@ def main():
     all_ids = set(by_id)
     ids = {r["id"]: tok(r["prompt"], add_special_tokens=False)["input_ids"] for r in rows}
 
+    # Rows with no focus key are not one group; see las.corpus.select_pairs.
     by_focus = collections.defaultdict(lambda: {"safe": [], "unsafe": []})
     for r in rows:
-        by_focus[r["focus"]][r["label"]].append(r)
+        if r["focus"].strip():
+            by_focus[r["focus"]][r["label"]].append(r)
 
     # For each focus term, the closest cross-label prompt pair.
     best = {}
@@ -75,7 +77,9 @@ def main():
         eval_focus = {by_id[i]["focus"] for i in used}
         # Focus-clean: a fit prompt sharing a focus term with an eval pair leaks
         # near-duplicate content into U_C. See SPEC.md §5.
-        clean = {i for i in (all_ids - used) if by_id[i]["focus"] not in eval_focus}
+        eval_focus.discard("")
+        clean = {i for i in (all_ids - used)
+                 if not by_id[i]["focus"].strip() or by_id[i]["focus"] not in eval_focus}
         lab = collections.Counter(by_id[i]["label"] for i in clean)
         bal = 2 * min(lab["safe"], lab["unsafe"])
         print(f"{thr:>4} {len(sel):>5} {len(clean):>15} {bal:>15} "

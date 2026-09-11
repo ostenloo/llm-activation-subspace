@@ -66,9 +66,14 @@ def select_pairs(rows: list[dict], token_ids: dict[str, list[int]]) -> dict[str,
     The edit locus is the focus term: XSTest is natively matched, with 18 types
     forming 9 X / contrast_X pairs joined by the focus column.
     """
+    # 75 of XSTest's 450 rows leave `focus` empty (the historical_events and
+    # nons_group_real_discr families). They are not one group: without the key
+    # there is nothing to verify a pair against, so grouping them together would
+    # select a "matched" pair by minimum distance over unrelated prompts.
     by_focus = collections.defaultdict(lambda: {"safe": [], "unsafe": []})
     for r in rows:
-        by_focus[r["focus"]][r["label"]].append(r)
+        if r["focus"].strip():
+            by_focus[r["focus"]][r["label"]].append(r)
 
     out = {}
     for focus, g in by_focus.items():
@@ -103,9 +108,13 @@ def build_split(
     by_id = {r["id"]: r for r in rows}
     selected = [p for p in pairs.values() if p.dist <= d_max]
     used = {i for p in selected for i in (p.safe_id, p.unsafe_id)}
-    eval_focus = {by_id[i]["focus"] for i in used}
+    eval_focus = {by_id[i]["focus"].strip() for i in used}
 
-    leaked = sorted(i for i in set(by_id) - used if by_id[i]["focus"] in eval_focus)
+    # An absent key cannot leak: a prompt with no focus term shares no focus term
+    # with an eval pair, and treating "" as a shared key would evict all 75 of them.
+    eval_focus.discard("")
+    leaked = sorted(i for i in set(by_id) - used
+                    if by_id[i]["focus"].strip() and by_id[i]["focus"] in eval_focus)
     clean = sorted(set(by_id) - used - set(leaked))
 
     if balance:

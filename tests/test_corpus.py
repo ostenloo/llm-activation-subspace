@@ -92,3 +92,25 @@ def test_real_xstest_shape_matches_the_spec():
     labels = collections.Counter(r["label"] for r in rows)
     assert labels == {"safe": 250, "unsafe": 200}
     assert len({r["type"] for r in rows}) == 18
+
+
+def test_empty_focus_rows_are_not_treated_as_one_group():
+    """75 of XSTest's 450 rows leave focus empty. Grouping them together would
+    select a 'matched' pair by minimum distance over unrelated prompts."""
+    rows = _rows() + [
+        {"id": "9",  "prompt": "alpha one", "type": "historical", "label": "safe",   "focus": ""},
+        {"id": "10", "prompt": "beta two",  "type": "contrast",   "label": "unsafe", "focus": ""},
+    ]
+    assert "" not in select_pairs(rows, _ids(rows))
+
+
+def test_empty_focus_rows_are_not_evicted_as_leakage():
+    """An absent key cannot leak; treating '' as shared would evict every one."""
+    rows = _rows() + [
+        {"id": "9",  "prompt": "alpha one", "type": "historical", "label": "safe",   "focus": ""},
+        {"id": "10", "prompt": "beta two",  "type": "contrast",   "label": "unsafe", "focus": ""},
+    ]
+    split = build_split(rows, select_pairs(rows, _ids(rows)), d_max=3, balance=False)
+    assert "9" not in split.evicted_for_leakage
+    assert "10" not in split.evicted_for_leakage
+    assert {"9", "10"} <= set(split.fit_ids)
